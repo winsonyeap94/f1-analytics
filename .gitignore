@@ -1,5 +1,9 @@
 **/data/cache/**
+**/docs/**
+**.bin
+**.sqlite3
 **.pkl
+**.pickle
 
 **/.vscode/**
 
