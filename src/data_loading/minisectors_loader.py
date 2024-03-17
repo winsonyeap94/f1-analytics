@@ -48,14 +48,15 @@ class MiniSectorsLoader:
         _driver_telemetry_df = []
         for session in self.sessions:
             _logger.debug(f"[{self.year} {self.track}] Loading telemetry for session: {session}")
+            f1_session = self.event.get_session(session)
+            f1_session.load()
             if drivers is None:
-                f1_session = self.event.get_session(session)
-                f1_session.load()
                 drivers = f1_session.laps['Driver'].sort_values().unique().tolist()
             for driver in drivers:
-                append_df = self._load_driver_telemetry(session, driver, self.minisectors_df)\
-                    .assign(Session=session, Driver=driver)
-                _driver_telemetry_df.append(append_df)
+                if driver in f1_session.laps['Driver'].unique():
+                    append_df = self._load_driver_telemetry(session, driver, self.minisectors_df)\
+                        .assign(Session=session, Driver=driver)
+                    _driver_telemetry_df.append(append_df)
         self.driver_telemetry_df = pd.concat(_driver_telemetry_df, axis=0).reset_index(drop=True)
         
         # Aggregate minisector statistics
@@ -217,7 +218,7 @@ class MiniSectorsLoader:
         ], axis=0).reset_index(drop=True)
 
         fig, ax = plt.subplots(figsize=(20, 8))
-        fig.suptitle(f"{self.track} ({self.year})\Minisector Analysis ({plot_var}) - {driver}", fontsize=16)
+        fig.suptitle(f"{self.track} ({self.year})\nMinisector Analysis ({plot_var}) - {driver}", fontsize=16)
         fig.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.05)
         ax.axis('off')
         ax.plot(minisector_lap_df['X_rotated'], minisector_lap_df['Y_rotated'], color='white', linewidth=16, zorder=0)

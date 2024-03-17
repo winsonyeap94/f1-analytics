@@ -16,3 +16,13 @@ class Config:
     # Distances before/after a corner to consider as a corner start/end
     CORNER_START_OFFSET_M = 100
     CORNER_END_OFFSET_M = 25
+
+    # ============================== MAPPINGS ==============================
+    SESSION_NAME_MAPPING = {
+        'FP1': 'Free Practice 1', 'FP2': 'Free Practice 2', 'FP3': 'Free Practice 3', 
+        'Q': 'Qualifying', 
+        'R': 'Race',
+        'S': 'Sprint',
+        'SS': 'Sprint Shootout',
+    }
+    
