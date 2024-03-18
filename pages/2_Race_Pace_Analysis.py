@@ -72,10 +72,77 @@ st.divider()
 # Load Race Pace Data
 rpc_loader = get_race_pace_data(track, year)
 
-tab1, tab2, tab3 = st.tabs(['Race', 'Free Practice', 'Comparison'])
+tab1, tab2, tab3 = st.tabs(['Comparison', 'Race', 'Free Practice'])
+
+# Comparison
+with tab1:
+    col1, col2 = st.columns(2)
+    with col1:
+        fp_r2_score, race_r2_score = rpc_loader.r2_score['FP'].round(3), rpc_loader.r2_score['R'].round(3)
+        fp_intercept, race_intercept = rpc_loader.intercept['FP'].round(2), rpc_loader.intercept['R'].round(2)
+        sub_col1, sub_col2 = st.columns(2)
+        with sub_col1:
+            st.subheader("Free Practice")
+            st.metric(label='R2 Score', value=fp_r2_score)
+            st.metric(label='Intercept (Base Race Pace)', value=fp_intercept)
+        with sub_col2:
+            st.subheader("Race")
+            st.metric(label='R2 Score', value=race_r2_score, delta=round(race_r2_score - fp_r2_score, 3))
+            st.metric(label='Intercept (Base Race Pace)', value=race_intercept, delta=round(race_intercept - fp_intercept, 2))
+        st.subheader('Coefficients')
+        coefficients = rpc_loader.coefficients['FP'].round(2).merge(
+            rpc_loader.coefficients['R'].round(2),
+            left_index=True, right_index=True,
+            suffixes=('_FP', '_R')
+        ).sort_values('abs_coef_R', ascending=False)\
+            .assign(delta_coef=lambda x: x['coef_R'] - x['coef_FP'], abs_delta_coef=lambda x: x['abs_coef_R'] - x['abs_coef_FP'])
+        st.dataframe(
+            coefficients.style\
+                .background_gradient(cmap='coolwarm', subset=['coef_FP', 'coef_R'], vmin=-coefficients[['abs_coef_FP', 'abs_coef_R']].max().max(), vmax=coefficients[['abs_coef_FP', 'abs_coef_R']].max().max())\
+                .background_gradient(cmap='RdYlGn', subset=['delta_coef'], vmin=-coefficients['delta_coef'].max(), vmax=coefficients['delta_coef'].max())\
+                .format({"coef_FP": "{:.3f}", "coef_R": "{:.3f}", "delta_coef": "{:.3f}", "abs_delta_coef": "{:.3f}"}),
+            height=500,
+            column_config={
+                "coef_FP": st.column_config.NumberColumn(
+                    "Coefficient (Free Practice)",
+                    format="%.3f",
+                ),
+                "coef_R": st.column_config.NumberColumn(
+                    "Coefficient (Race)",
+                    format="%.3f",
+                ),
+                "abs_coef_FP": st.column_config.ProgressColumn(
+                    "Abs. Coefficient (Free Practice)",
+                    format="%.3f",
+                    min_value=0,
+                    max_value=coefficients['abs_coef_FP'].max(),
+                ),
+                "abs_coef_R": st.column_config.ProgressColumn(
+                    "Abs. Coefficient (Race)",
+                    format="%.3f",
+                    min_value=0,
+                    max_value=coefficients['abs_coef_R'].max(),
+                ),
+                "delta_coef": st.column_config.NumberColumn(
+                    "Δ (Coefficient)",
+                    format="%.3f",
+                ),
+                "abs_delta_coef": st.column_config.ProgressColumn(
+                    "Δ (Abs. Coefficient)",
+                    format="%.3f",
+                    min_value=0,
+                    max_value=coefficients['abs_delta_coef'].max(),
+                )
+            }
+        )
+    with col2:
+        st.subheader("Race")
+        st.pyplot(rpc_loader.r2_fig['R'])
+        st.subheader("Free Practice")
+        st.pyplot(rpc_loader.r2_fig['FP'])
 
 # Race
-with tab1:
+with tab2:
     col1, col2 = st.columns(2)
     with col1:
         st.metric(label='R2 Score', value=rpc_loader.r2_score['R'].round(3))
@@ -111,11 +178,8 @@ with tab1:
         st.pyplot(rpc_loader.r2_fig['R'])
 
 
-st.dataframe(rpc_loader.valid_laps_df)
-
-
 # Free Practice
-with tab2:
+with tab3:
     col1, col2 = st.columns(2)
     with col1:
         st.metric(label='R2 Score', value=rpc_loader.r2_score['FP'].round(3))
@@ -141,6 +205,6 @@ with tab2:
         )
     with col2:
         st.pyplot(rpc_loader.r2_fig['FP'])
-    
 
 
+st.dataframe(rpc_loader.valid_laps_df)
