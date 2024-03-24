@@ -2,6 +2,7 @@ import os
 import sys
 import numpy as np
 import pandas as pd
+import altair as alt
 import fastf1
 import fastf1.plotting
 import seaborn as sns
@@ -35,6 +36,7 @@ class RacePaceCoefficientsLoader:
         self.load_telemetry = load_telemetry
         self.intercept = dict()
         self.coefficients = dict()
+        self.model_df = dict()
         self.r2_score = dict()
         self.r2_fig = dict()
     
@@ -44,8 +46,12 @@ class RacePaceCoefficientsLoader:
         """
         _stime = datetime.now()
         self.valid_laps_df = self._load_session_data()
-        self.intercept['FP'], self.coefficients['FP'], self.r2_score['FP'], self.r2_fig['FP'] = self._fit_coefficients(self.valid_laps_df, session_category='FP')
-        self.intercept['R'], self.coefficients['R'], self.r2_score['R'], self.r2_fig['R'] = self._fit_coefficients(self.valid_laps_df, session_category='R')
+        if set(self.sessions).intersection(['FP1', 'FP2', 'FP3']):
+            self.intercept['FP'], self.coefficients['FP'], self.model_df['FP'] = self._fit_coefficients(self.valid_laps_df, session_category='FP')
+            self.r2_score['FP'], self.r2_fig['FP'] = self.viz_model_fit_accuracy(self.model_df['FP'])
+        if 'R' in self.sessions:
+            self.intercept['R'], self.coefficients['R'], self.model_df['R'] = self._fit_coefficients(self.valid_laps_df, session_category='R')
+            self.r2_score['R'], self.r2_fig['R'] = self.viz_model_fit_accuracy(self.model_df['R'])
         _etime = datetime.now()
         _logger.info(f"[{self.year} {self.track}] Load completed in: {_etime - _stime}")
         
@@ -84,7 +90,7 @@ class RacePaceCoefficientsLoader:
         
         # ============================== Preprocessing Data ==============================
         # Extracting lap information and adding weather
-        valid_laps_df = laps_df.query("(Deleted == False) and (IsAccurate == True)").copy()
+        valid_laps_df = laps_df.query("(Deleted == False) and (IsAccurate == True) and (Stint.notna())").copy()
         valid_laps_df['LapTime_seconds'] = valid_laps_df['LapTime'].dt.total_seconds()
         _valid_laps_df = []
         for session in valid_laps_df['Session'].sort_values().unique():
@@ -143,6 +149,8 @@ class RacePaceCoefficientsLoader:
                 for session in telemetry_df['Session'].sort_values().unique():
                     driver_session_telemetry_df = driver_telemetry_df.query(f"Session == '{session}'").copy()
                     driver_session_laps_df = laps_df.query(f"Driver == '{driver}' and Session == '{session}'")
+                    if driver_session_telemetry_df.empty or driver_session_laps_df.empty:
+                        continue
                     driver_session_telemetry_df['LapNumber'] = pd.cut(
                         driver_session_telemetry_df['Time'],
                         bins=driver_session_laps_df['Time'].tolist() + [driver_session_laps_df['Time'].max() + timedelta(days=1)],
@@ -196,21 +204,136 @@ class RacePaceCoefficientsLoader:
             .sort_values('abs_coef', ascending=False)
 
         # Model R2 Score
-        y_true, y_pred = model_df['LapTime_seconds'], lr_model.predict(model_df[input_features])
-        r2_value = r2_score(y_true=model_df['LapTime_seconds'], y_pred=y_pred)
+        model_df['Actual Lap Time (s)'] = model_df['LapTime_seconds']
+        model_df['Predicted Lap Time (s)'] = lr_model.predict(model_df[input_features])
         
-        fig, ax = plt.subplots(figsize=(12, 6))
-        sns.regplot(x=y_pred, y=y_true, ax=ax)
-        ax.plot([y_true.min(), y_true.max()], [y_true.min(), y_true.max()], '--', lw=2, color='white')
-        ax.set_xlabel('Predicted Lap Time (s)')
-        ax.set_ylabel('Actual Lap Time (s)')
-        ax.set_title(f"Predicted vs Actual Lap Time (R2 Score: {r2_value:.3f})")
+        return intercept, coefficients_df, model_df
+    
+    @staticmethod
+    def viz_model_fit_accuracy(model_df, team=None, driver=None, width=600, height=500):
+        """
+        Visualizes the accuracy of a model's fit using Altair.
 
-        return intercept, coefficients_df, r2_value, fig
+        This method creates a scatter plot of the actual vs predicted lap times,
+        and overlays it with a line of best fit and a line of perfect fit (slope=1).
+        The R2 score is included in the title of the plot.
+        """
+        y_true, y_pred = model_df['Actual Lap Time (s)'], model_df['Predicted Lap Time (s)']
+        r2_value = r2_score(y_true=y_true, y_pred=y_pred)
+        
+        plot_df = pd.DataFrame({'Actual Lap Time (s)': y_true, 'Predicted Lap Time (s)': y_pred})
+        xy_limits = (plot_df.min().min(), plot_df.max().max())
+        (fit_slope, fit_intercept) = np.polyfit(x=y_pred, y=y_true, deg=1)
+        fit_df = pd.DataFrame({'Predicted Lap Time (s)': xy_limits, 'Actual Lap Time (s)': fit_slope * np.array(xy_limits) + fit_intercept})
+        ideal_df = pd.DataFrame({'Predicted Lap Time (s)': xy_limits, 'Actual Lap Time (s)': xy_limits})
+        
+        focus_df = None
+        if (str(driver) != "None") and (str(driver) != "Both"):
+            focus_df = model_df.query(f"Driver == '{driver}'")[['Actual Lap Time (s)', 'Predicted Lap Time (s)']].copy()
+            focus_colour = fastf1.plotting.driver_color(driver)
+        elif str(team) != "None":
+            focus_df = model_df.query(f"Team == '{team}'").copy()
+            focus_colour = fastf1.plotting.team_color(team)
+        if focus_df is not None:
+            (focus_fit_slope, focus_fit_intercept) = np.polyfit(x=focus_df['Predicted Lap Time (s)'], y=focus_df['Actual Lap Time (s)'], deg=1)
+            focus_fit_df = pd.DataFrame({'Predicted Lap Time (s)': xy_limits, 'Actual Lap Time (s)': focus_fit_slope * np.array(xy_limits) + focus_fit_intercept})
+        
+        opacity = 0.5 if focus_df is None else 0.1
+        scatter = alt.Chart(plot_df).mark_circle(size=60, opacity=opacity).encode(
+            x=alt.X('Predicted Lap Time (s):Q').scale(domain=xy_limits),
+            y=alt.Y('Actual Lap Time (s):Q').scale(domain=xy_limits),
+            tooltip=['Actual Lap Time (s):Q', 'Predicted Lap Time (s):Q']
+        )
+        fit_line = alt.Chart(fit_df).mark_line(color='red').encode(
+            x=alt.X('Predicted Lap Time (s):Q').scale(domain=xy_limits),
+            y=alt.Y('Actual Lap Time (s):Q').scale(domain=xy_limits),
+        )
+        ideal_line = alt.Chart(ideal_df).mark_line(color='grey', strokeDash=[3, 3]).encode(
+            x=alt.X('Predicted Lap Time (s):Q').scale(domain=xy_limits),
+            y=alt.Y('Actual Lap Time (s):Q').scale(domain=xy_limits),
+        )
+        if focus_df is None:
+            altair_fig = (scatter + fit_line + ideal_line)
+        else:
+            focus_scatter = alt.Chart(focus_df).mark_circle(size=60, opacity=1, color=focus_colour).encode(
+                x=alt.X('Predicted Lap Time (s):Q').scale(domain=xy_limits),
+                y=alt.Y('Actual Lap Time (s):Q').scale(domain=xy_limits),
+                tooltip=['Actual Lap Time (s):Q', 'Predicted Lap Time (s):Q']
+            )
+            focus_fit_line = alt.Chart(focus_fit_df).mark_line(color=focus_colour).encode(
+                x=alt.X('Predicted Lap Time (s):Q').scale(domain=xy_limits),
+                y=alt.Y('Actual Lap Time (s):Q').scale(domain=xy_limits),
+            )
+            altair_fig = (scatter + fit_line + ideal_line + focus_scatter + focus_fit_line)
+        altair_fig = altair_fig\
+                .properties(width=width, height=height, title=f"Predicted vs Actual Lap Time (R2 Score: {r2_value:.3f})")\
+                .configure_axis(labelFontSize=15, titleFontSize=15)\
+                .interactive()
+        
+        return r2_value, altair_fig
+
+    @staticmethod
+    def viz_team_driver_coefficients(coef_df, valid_laps_df):
+        """
+        Visualises the coefficients for each driver and team.
+        """
+        # Extracting the coefficients for the drivers and teams
+        drivers_coef_df = coef_df.loc[[x for x in coef_df.index if x.startswith('Driver')], ['coef']].copy()
+        drivers_coef_df.index = [x.replace('Driver_', '') for x in drivers_coef_df.index]
+        teams_coef_df = coef_df.loc[[x for x in coef_df.index if x.startswith('Team')], ['coef']].copy()
+        teams_coef_df.index = [x.replace('Team_', '') for x in teams_coef_df.index]
+
+        # Get Driver-Team Mapping
+        driver_team_mapping = valid_laps_df[['Driver', 'Team']].drop_duplicates()
+        driver_team_mapping = driver_team_mapping.set_index('Driver').to_dict(orient='index')
+        driver_team_mapping = {k: v['Team'] for k, v in driver_team_mapping.items()}
+
+        drivers_coef_df['Team'] = drivers_coef_df.index.map(driver_team_mapping)
+        drivers_coef_df = drivers_coef_df.merge(teams_coef_df, left_on='Team', right_index=True, suffixes=('_driver', '_team'))
+        drivers_coef_df['DriverCoef_Adjusted'] = drivers_coef_df['coef_team'] + drivers_coef_df['coef_driver']
+
+        drivers_coef_df = drivers_coef_df.rename(columns={
+            'DriverCoef_Adjusted': 'Driver Coefficient',
+            'coef_team': 'Team Coefficient',
+        })
+
+        slower_drivers_coef_df = drivers_coef_df.sort_values(['Team', 'Driver Coefficient'], ascending=[True, False]).drop_duplicates(subset=['Team'], keep='last').reset_index(drop=False).rename(columns={'index': 'Driver'})
+        slower_drivers_coef_df['TextLabel_Min'] = "(" + slower_drivers_coef_df['Driver'] + ") " + slower_drivers_coef_df['Driver Coefficient'].round(2).astype(str)
+        faster_drivers_coef_df = drivers_coef_df.sort_values(['Team', 'Driver Coefficient'], ascending=[True, False]).drop_duplicates(subset=['Team'], keep='first').reset_index(drop=False).rename(columns={'index': 'Driver'})
+        faster_drivers_coef_df['TextLabel_Max'] = "(" + faster_drivers_coef_df['Driver'] + ") " + faster_drivers_coef_df['Driver Coefficient'].round(2).astype(str)
+        drivers_coef_df = drivers_coef_df.merge(slower_drivers_coef_df[['Team', 'TextLabel_Min']], on='Team', how='left')
+        drivers_coef_df = drivers_coef_df.merge(faster_drivers_coef_df[['Team', 'TextLabel_Max']], on='Team', how='left')
+
+        # Viz
+        y_sort = alt.EncodingSortField(field="Team Coefficient", op="mean", order='ascending')
+        bar = alt.Chart(drivers_coef_df).mark_bar(cornerRadius=20, height=20).encode(
+            x=alt.X('min(Driver Coefficient):Q').title('Race Pace Coefficient'),
+            x2='max(Driver Coefficient):Q',
+            y=alt.Y('Team:O', sort=y_sort).title('Team'),
+            tooltip=['Team:O', alt.Tooltip('min(Driver Coefficient):Q', format='.3f'), alt.Tooltip('max(Driver Coefficient):Q', format='.3f')]
+        )
+        marker = alt.Chart(drivers_coef_df).mark_point(color='red', filled=True, size=100).encode(
+            x='mean(Team Coefficient):Q',
+            y=alt.Y('Team:O', sort=y_sort),
+            tooltip=['Team:O', alt.Tooltip('mean(Team Coefficient):Q', format='.3f')]
+        )
+        text_min = alt.Chart(drivers_coef_df).mark_text(align='right', dx=-5, fontSize=12).encode(
+            x='min(Driver Coefficient):Q',
+            y=alt.Y('Team:O', sort=y_sort),
+            text=alt.Text('min(TextLabel_Min):O'),
+        )
+        text_max = alt.Chart(drivers_coef_df).mark_text(align='left', dx=5, fontSize=12).encode(
+            x='max(Driver Coefficient):Q',
+            y=alt.Y('Team:O', sort=y_sort),
+            text=alt.Text('max(TextLabel_Max):O'),
+        )
+        rule = alt.Chart(pd.DataFrame({'x': [0]})).mark_rule(color='grey', strokeDash=[3, 3]).encode(x='x')
+        return (rule + bar + text_min + text_max + marker).properties(width=700, height=400)\
+            .configure_axis(labelFontSize=15, titleFontSize=15)
 
 
 if __name__ == "__main__":
     
-    rpc_loader = RacePaceCoefficientsLoader(2021, 'Bahrain', load_telemetry=True)
+    rpc_loader = RacePaceCoefficientsLoader(2024, 'Australia', sessions=['FP1', 'FP2', 'FP3'], load_telemetry=True)
     rpc_loader.load()
 
